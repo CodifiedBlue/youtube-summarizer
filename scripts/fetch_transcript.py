@@ -78,8 +78,9 @@ def _download_subs(url: str, output_template: str) -> Path | None:
     """Call yt-dlp to download English subs (manual preferred, auto fallback).
 
     yt-dlp writes to <output_template>.en.vtt (or similar locale variant).
-    Returns the Path of the produced .en*.vtt file, or None on failure
-    (yt-dlp non-zero exit OR no .en*.vtt file found).
+    Returns the Path of the produced .en*.vtt file, or None if no file was
+    produced. Surfaces yt-dlp's stderr to our stderr on non-zero exit and
+    returns None.
     """
     cmd = [
         "yt-dlp",
@@ -93,6 +94,10 @@ def _download_subs(url: str, output_template: str) -> Path | None:
     ]
     cp = subprocess.run(cmd, capture_output=True, text=True)
     if cp.returncode != 0:
+        stripped = cp.stderr.strip() if cp.stderr else ""
+        lines = stripped.splitlines()
+        msg = lines[-1] if lines else f"exit code {cp.returncode}"
+        sys.stderr.write(f"yt-dlp: {msg}\n")
         return None
     parent = Path(output_template).parent
     base = Path(output_template).name

@@ -12,7 +12,7 @@ All three are written into a per-video subfolder named `<slug>--<YYYY.MM.DD>` un
 
 Requirements:
 
-- Python 3.10+
+- Python 3.9+
 - `yt-dlp` on `$PATH`. Install with `brew install yt-dlp` (or `pip install --user yt-dlp`).
 - Claude Code with the skill discovered in this repository.
 

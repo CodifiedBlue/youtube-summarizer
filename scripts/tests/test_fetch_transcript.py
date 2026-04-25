@@ -216,3 +216,31 @@ class TestRunForceClobbers:
         # File was replaced.
         assert "fresh" in stale.read_text(encoding="utf-8")
         assert "STALE" not in stale.read_text(encoding="utf-8")
+
+
+class TestRunSubsDownloadNetworkError:
+    def test_surfaces_yt_dlp_stderr_when_subs_download_fails(self, tmp_path, capsys):
+        def fake_run(cmd, *args, **kwargs):
+            if "--dump-json" in cmd:
+                return _completed(stdout=json.dumps(METADATA_OK))
+            # Subs download fails with a non-zero exit and a network-style stderr.
+            return _completed(
+                returncode=1,
+                stderr="ERROR: Unable to download webpage: HTTPSConnectionPool(host='youtube.com', port=443): Max retries exceeded",
+            )
+
+        with patch.object(fetch_transcript.shutil, "which", side_effect=_which_side_effect(True)), \
+             patch.object(fetch_transcript.subprocess, "run", side_effect=fake_run):
+            rc = fetch_transcript.run(
+                url="https://youtu.be/8rABwKRsec4",
+                output_dir=str(tmp_path),
+                force=False,
+            )
+
+        captured = capsys.readouterr()
+        assert rc != 0
+        # yt-dlp stderr was surfaced (not silently swallowed).
+        assert "yt-dlp:" in captured.err
+        assert "Max retries exceeded" in captured.err
+        # The "no captions" fallback message also fires (acceptable double-message).
+        assert "No English captions available" in captured.err
