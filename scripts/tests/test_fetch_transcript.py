@@ -244,3 +244,49 @@ class TestRunSubsDownloadNetworkError:
         assert "Max retries exceeded" in captured.err
         # The "no captions" fallback message also fires (acceptable double-message).
         assert "No English captions available" in captured.err
+
+
+class TestRunCleansUpDuplicateVtts:
+    """When yt-dlp produces multiple .en*.vtt files (manual + auto-generated),
+    only the canonical --original.vtt should remain in the folder."""
+
+    def test_extra_en_vtts_are_removed(self, tmp_path, capsys):
+        def fake_run(cmd, *args, **kwargs):
+            if "--dump-json" in cmd:
+                return _completed(stdout=json.dumps(METADATA_OK))
+            # Subs download — write TWO fake VTTs (e.g., manual + auto-generated original).
+            output_idx = cmd.index("--output")
+            output_template = cmd[output_idx + 1]
+            parent = Path(output_template).parent
+            parent.mkdir(parents=True, exist_ok=True)
+            # Distinguishable contents so we can tell which one was kept.
+            # Sorted alphabetically: ".en-orig.vtt" < ".en.vtt" (since '-' < '.' in ASCII),
+            # so .en-orig.vtt is matches[0] and is what gets kept.
+            Path(output_template + ".en.vtt").write_text(
+                "WEBVTT\n\n00:00:00.000 --> 00:00:02.000\nMANUAL\n", encoding="utf-8"
+            )
+            Path(output_template + ".en-orig.vtt").write_text(
+                "WEBVTT\n\n00:00:00.000 --> 00:00:02.000\nAUTO-ORIG\n", encoding="utf-8"
+            )
+            return _completed(returncode=0)
+
+        with patch.object(fetch_transcript.shutil, "which", side_effect=_which_side_effect(True)), \
+             patch.object(fetch_transcript.subprocess, "run", side_effect=fake_run):
+            rc = fetch_transcript.run(
+                url="https://youtu.be/8rABwKRsec4",
+                output_dir=str(tmp_path),
+                force=False,
+            )
+
+        assert rc == 0
+        emitted = json.loads(capsys.readouterr().out)
+        folder = Path(emitted["folder"])
+        # Exactly one VTT remains: the canonical --original.vtt.
+        vtts = sorted(folder.glob("*.vtt"))
+        assert len(vtts) == 1, f"Expected 1 VTT, got {[p.name for p in vtts]}"
+        assert vtts[0].name.endswith("--original.vtt")
+        # The kept content is matches[0] = the .en-orig.vtt body.
+        assert "AUTO-ORIG" in vtts[0].read_text(encoding="utf-8")
+        # No leftover .en*.vtt siblings.
+        siblings = list(folder.glob("*.en*.vtt"))
+        assert siblings == [], f"Unexpected leftover VTTs: {[p.name for p in siblings]}"
