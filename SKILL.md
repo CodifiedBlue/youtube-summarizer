@@ -28,11 +28,13 @@ Execute these stages sequentially. Each on-disk output gates its stage: if it al
 
 ### Stage 1: Fetch transcript
 
-Run:
+Run (from any cwd):
 
 ```bash
-python3 scripts/fetch_transcript.py <URL> [--output-dir <path>] [--force]
+python3 ~/.claude/skills/youtube-summarizer/scripts/fetch_transcript.py <URL> [--output-dir <path>] [--force]
 ```
+
+The default `--output-dir` is the user's current working directory, so the per-video folder lands where the user is, not in the skill install location.
 
 The script handles smart-resume internally for `--original.vtt`.
 
@@ -63,7 +65,7 @@ If that file already exists and `--force` was not passed, skip this stage.
 
 Otherwise:
 
-1. Run `python3 scripts/parse_vtt.py <vtt_path>`. Capture the JSON list of cues from stdout. Each cue has `start` (seconds), `end` (seconds), `text`.
+1. Run `python3 ~/.claude/skills/youtube-summarizer/scripts/parse_vtt.py <vtt_path>`. Capture the JSON list of cues from stdout. Each cue has `start` (seconds), `end` (seconds), `text`.
 2. Use the prompt below ("Stage 2 prompt") to produce the processed Markdown content. Apply your own judgment for speakers and topic shifts; do not paraphrase the words.
 3. Write the result to `<folder>/<basename>--processed.md`.
 
