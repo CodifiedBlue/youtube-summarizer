@@ -1,0 +1,9 @@
+WEBVTT
+Kind: captions
+Language: en
+
+00:00:00.000 --> 00:00:02.000 align:start position:0%
+<00:00:00.000><c>hello</c><00:00:01.000><c> world</c>
+
+00:00:02.000 --> 00:00:04.000
+this is <i>italic</i> text
