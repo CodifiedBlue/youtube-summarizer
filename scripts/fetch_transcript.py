@@ -62,7 +62,9 @@ def _fetch_metadata(url: str) -> dict | None:
     cmd = ["yt-dlp", "--dump-json", "--no-download", url]
     cp = subprocess.run(cmd, capture_output=True, text=True)
     if cp.returncode != 0:
-        msg = cp.stderr.strip().splitlines()[-1] if cp.stderr else f"exit code {cp.returncode}"
+        stripped = cp.stderr.strip() if cp.stderr else ""
+        lines = stripped.splitlines()
+        msg = lines[-1] if lines else f"exit code {cp.returncode}"
         sys.stderr.write(f"yt-dlp: {msg}\n")
         return None
     try:
@@ -72,11 +74,12 @@ def _fetch_metadata(url: str) -> dict | None:
         return None
 
 
-def _download_subs(url: str, output_template: str) -> bool:
+def _download_subs(url: str, output_template: str) -> Path | None:
     """Call yt-dlp to download English subs (manual preferred, auto fallback).
 
     yt-dlp writes to <output_template>.en.vtt (or similar locale variant).
-    Returns True if at least one .en*.vtt file was produced.
+    Returns the Path of the produced .en*.vtt file, or None on failure
+    (yt-dlp non-zero exit OR no .en*.vtt file found).
     """
     cmd = [
         "yt-dlp",
@@ -90,17 +93,7 @@ def _download_subs(url: str, output_template: str) -> bool:
     ]
     cp = subprocess.run(cmd, capture_output=True, text=True)
     if cp.returncode != 0:
-        msg = cp.stderr.strip().splitlines()[-1] if cp.stderr else f"exit code {cp.returncode}"
-        sys.stderr.write(f"yt-dlp: {msg}\n")
-        return False
-    # yt-dlp may produce <template>.en.vtt or <template>.en-orig.vtt etc.
-    parent = Path(output_template).parent
-    base = Path(output_template).name
-    matches = sorted(parent.glob(f"{base}.en*.vtt"))
-    return len(matches) > 0
-
-
-def _locate_produced_vtt(output_template: str) -> Path | None:
+        return None
     parent = Path(output_template).parent
     base = Path(output_template).name
     matches = sorted(parent.glob(f"{base}.en*.vtt"))
@@ -142,14 +135,8 @@ def run(url: str, output_dir: str, force: bool) -> int:
     if needs_download:
         # yt-dlp writes to <template>.en*.vtt; we pass a template without an extension.
         output_template = str(folder / basename)
-        ok = _download_subs(webpage_url, output_template)
-        if not ok:
-            sys.stderr.write(
-                f"No English captions available for {video_id}. Skill requires English subs.\n"
-            )
-            return 1
-        produced = _locate_produced_vtt(output_template)
-        if produced is None:
+        produced = _download_subs(webpage_url, output_template)
+        if produced is None or produced.stat().st_size == 0:
             sys.stderr.write(
                 f"No English captions available for {video_id}. Skill requires English subs.\n"
             )
@@ -166,7 +153,7 @@ def run(url: str, output_dir: str, force: bool) -> int:
         "title": title,
         "channel": channel,
         "upload_date": _date_iso(upload_date),
-        "url": url,
+        "url": f"https://youtu.be/{video_id}",
         "vtt_path": str(target_vtt),
     }
     json.dump(result, sys.stdout, ensure_ascii=False)
