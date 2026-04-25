@@ -102,7 +102,12 @@ def _download_subs(url: str, output_template: str) -> Path | None:
     parent = Path(output_template).parent
     base = Path(output_template).name
     matches = sorted(parent.glob(f"{base}.en*.vtt"))
-    return matches[0] if matches else None
+    if not matches:
+        return None
+    kept, *extras = matches
+    for extra in extras:
+        extra.unlink()
+    return kept
 
 
 def run(url: str, output_dir: str, force: bool) -> int:
