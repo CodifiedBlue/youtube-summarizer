@@ -157,11 +157,11 @@ OpenAI's Model Spec is the working example. It's a living document of the intent
 - Change-logged
 - Anyone can contribute
 
-Legal · policy · product · safety — not just engineers.
+Product · design · engineering · QA — not just one team.
 
 --speaker notes--
 
-Markdown is remarkable for this. It's human-readable, versioned, and change-logged. And because it's natural language, anyone in the company can contribute — legal, policy, product, safety. It's the universal artifact that aligns everyone on what the models should and shouldn't do.
+Markdown is remarkable for this. It's human-readable, versioned, and change-logged. And because it's natural language, anyone on the team can contribute — product managers, designers, engineers, QA. It's the universal artifact that aligns everyone on what the system should and shouldn't do.
 
 ---
 
@@ -271,31 +271,17 @@ And the entire tool chain ports over. Type checkers become consistency checks be
 
 --content--
 
-## The Constitution is a national spec
+## Everyone on the team is a spec author
 
-- Written policy
-- Versioned amendments
-- Judicial review = grader
-- Precedent = unit test
-
---speaker notes--
-
-This pattern is universal. The US Constitution is a national-scale model spec. It has written, aspirationally clear policy. It has versioned amendments. Judicial review is the grader scoring real situations against the policy. And precedent is precisely a unit test — an input/output pair that disambiguates the original spec.
-
----
-
---content--
-
-## Everyone is a spec author
-
-- **Engineers** align silicon
-- **PMs** align teams
-- **Lawmakers** align humans
-- **Prompters** align models
+- **Engineers** → technical design docs
+- **PMs** → product requirements
+- **UX designers** → wireframes & flows
+- **QA** → test plans & acceptance criteria
+- **Prompters** → model prompts
 
 --speaker notes--
 
-That means everyone is already a spec author. Engineers align silicon through code specs. Product managers align teams through product specs. Lawmakers align humans through legal specs. And anyone writing a prompt is aligning a model. Every prompt is a proto-specification.
+That means everyone on a software team is already a spec author. Engineers align silicon through technical design docs. PMs align teams through product requirements. UX designers align users through wireframes and flow specs. QA aligns the release through test plans and acceptance criteria. And anyone writing a prompt is aligning a model. Every one of these artifacts is a specification.
 
 ---
 
