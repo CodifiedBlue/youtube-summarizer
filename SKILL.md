@@ -5,22 +5,27 @@ description: Use when the user shares a YouTube URL and wants a transcript, proc
 
 # YouTube Summarizer
 
-This skill turns a YouTube URL into three Markdown artifacts in a per-video subfolder:
+This skill turns a YouTube URL into these artifacts in a per-video subfolder:
 
 1. `<basename>--original.vtt` — raw English captions from `yt-dlp`.
 2. `<basename>--processed.md` — readable transcript with movie-script speaker labels and topic-grouped paragraphs, each anchored with a YouTube timestamp link.
-3. `<basename>--summary.md` — structured summary: overview, key takeaways, action items, lists mentioned, salient quotes.
+3. `frames/` — candidate on-screen-visual frames (JPEGs) extracted from the video, plus a `manifest.json` mapping each frame to a timestamp. Candidates are limited to frames that are **held static** on screen (see Stage 3), so the set is small and high-precision. Non-salient candidates are pruned during Stage 4; the kept frames are embedded in the summary.
+4. `<basename>--summary.md` — structured summary: overview, key takeaways, action items, lists mentioned, salient quotes, and **key visuals** (the most salient graphs, charts, tables, and diagrams shown on screen).
 
-The skill splits work between Python helpers (deterministic) and Claude (language-judgment). You — Claude — handle stages 2 and 3.
+The skill splits work between Python helpers (deterministic) and Claude (language- and vision-judgment). You — Claude — handle stages 2 and 4 (Stage 3 is a Python helper; you do the vision selection during Stage 4).
 
 ## Inputs
 
 - A YouTube URL (full `https://www.youtube.com/watch?v=...` or short `https://youtu.be/...`).
 - Optional flags from the user:
-  - `--force` — redo all three stages even if outputs exist.
+  - `--force` — redo all stages even if outputs exist.
   - `--output-dir <path>` — where to create the per-video folder. Default: current working directory.
+  - `--no-visuals` — skip video download and frame analysis (Stage 3); the summary omits the Key Visuals section. Use this for audio-only content, or when the user only wants text.
+  - `--min-hold <seconds>` — passed through to Stage 3; how long a frame must stay static to count as a held visual (default `3.0`). Raise it to filter more talking-head pauses; lower it to catch briefly-shown slides.
+  - `--freeze-noise <dB|ratio>` — passed through to Stage 3; how much pixel motion still counts as "static" (default `-60dB`). Loosen it (e.g. `0.006`) when slides have a small moving element like a webcam PIP or watermark.
+  - `--max-frames <N>` — cap on candidate frames handed to the vision layer in Stage 3 (default `60`).
 
-If the user's message contains a YouTube URL but no explicit flags, default to no flags.
+If the user's message contains a YouTube URL but no explicit flags, default to no flags. Default behavior includes visual analysis (Stage 3). Only skip it when `--no-visuals` is passed or when the tooling is unavailable (see Errors).
 
 ## Workflow
 
@@ -116,7 +121,42 @@ Rules:
 
 Write only the Markdown document. No commentary, no surrounding explanations.
 
-### Stage 3: Build `--summary.md`
+### Stage 3: Extract candidate frames
+
+Skip this stage entirely if `--no-visuals` was passed.
+
+This stage downloads a resolution-capped copy of the video and extracts candidate frames plus a manifest. It is a deterministic Python helper — it does **not** decide which frames are salient. That judgment happens in Stage 4.
+
+**How candidates are chosen (and why it's cheap):** salient visuals — charts, tables, slides, diagrams — are *held still* on screen, whereas talking heads, transitions, animations, and b-roll are in constant motion. The helper uses ffmpeg's `freezedetect` filter to find segments where the picture stops changing for at least `--min-hold` seconds, then keeps ONE representative frame per held segment. This is purely mechanical (no LLM) and drastically shrinks the set the vision layer must review: a pure talking-head video yields ~zero candidates, while a slide deck yields roughly one frame per slide.
+
+The output gate is `<folder>/frames/manifest.json`. If it already exists and `--force` was not passed, skip this stage (the manifest is re-emitted so downstream still has it).
+
+Run:
+
+```bash
+python3 ~/.claude/skills/youtube-summarizer/scripts/extract_frames.py <URL> --folder <folder> [--force] [--min-hold <S>] [--freeze-noise <N>] [--max-candidates <N>]
+```
+
+Pass through the user's `--min-hold` and `--freeze-noise`, and map `--max-frames` to `--max-candidates`, if they were provided. It is normal and expected for `count` to be `0` on videos with no static visuals — that is the desired outcome, not an error.
+
+The script emits a single JSON line on stdout:
+
+```json
+{
+  "frames_dir": "/abs/path/frames",
+  "manifest_path": "/abs/path/frames/manifest.json",
+  "count": 42,
+  "frames": [
+    {"file": "frame-00012s.jpg", "path": "/abs/.../frame-00012s.jpg", "seconds": 12, "timestamp": "00:12"}
+  ]
+}
+```
+
+Capture this JSON — Stage 4 needs the `frames` list (each entry's `path`, `seconds`, and `timestamp`).
+
+Error handling for this stage is non-fatal: if the script exits non-zero (ffmpeg missing, video unavailable, download blocked, etc.), do **not** stop the pipeline. Note the failure, continue to Stage 4, and produce the summary with the Key Visuals section set to `_None._`. Visuals are an enhancement, not a hard requirement.
+
+### Stage 4: Build `--summary.md`
 
 Compute the target path: `<folder>/<basename>--summary.md`.
 
@@ -125,12 +165,23 @@ If that file already exists and `--force` was not passed, skip this stage.
 Otherwise:
 
 1. Read `<folder>/<basename>--processed.md` (which already has speaker labels and timestamps).
-2. Use the prompt below ("Stage 3 prompt") to produce the summary content.
-3. Write the result to `<folder>/<basename>--summary.md`.
+2. If Stage 3 ran and produced candidate frames, perform **visual selection** (see below) before writing the summary. Otherwise treat Key Visuals as empty.
+3. Use the prompt below ("Stage 4 prompt") to produce the summary content.
+4. Write the result to `<folder>/<basename>--summary.md`.
 
-#### Stage 3 prompt
+#### Visual selection (vision step)
 
-You are producing a structured summary file from a speaker-labeled transcript. Input: the contents of `--processed.md` (which has the title, metadata header, and timestamped speaker-labeled paragraphs).
+Do this only when Stage 3 produced a non-empty `frames` list. If `count` is `0`, skip straight to writing the summary with Key Visuals as `_None._` — do not read any images.
+
+1. Read the candidate frame images. Use the Read tool on each frame's `path` (they are JPEGs). Batch the reads. Review all of them: Stage 3 already filtered to held/static frames and capped the set, so the count is small (often a handful) and cheap to inspect.
+2. Select the **most salient** frames — ones that show information a reader would want captured: graphs, charts, plots, tables, diagrams, architecture drawings, code snippets, comparison matrices, key slides with data, maps, or any dense on-screen visual. **Reject** talking-head shots that happened to hold still, plain title cards, transitions, logos, blurry/mid-animation frames, near-duplicates of an already-selected frame, and purely decorative footage.
+3. Aim for roughly 3–10 kept visuals for a typical video (fewer for short or visually sparse content; it is fine to keep zero if nothing qualifies). When two candidates show the same chart, keep the single clearest one.
+4. **Prune the folder.** Delete the candidate frames you are NOT keeping from `<folder>/frames/` so only the salient images remain on disk. Keep `manifest.json`. (Deleting is optional if you prefer to leave the full candidate set, but the default is to prune so the folder is clean.)
+5. For each kept frame, note its `seconds`/`timestamp` from the manifest and write a one-line caption describing what the visual shows. Embed it in the summary's Key Visuals section using a relative image path (`frames/<file>`) so the Markdown renders the image inline.
+
+#### Stage 4 prompt
+
+You are producing a structured summary file from a speaker-labeled transcript, plus (optionally) a set of salient frames you selected in the vision step. Inputs: the contents of `--processed.md` (title, metadata header, timestamped speaker-labeled paragraphs), and the list of kept visuals (each with a `file`, `seconds`, `timestamp`, and your caption).
 
 Produce a Markdown document with this exact structure and section order. Sections that have no content render as the heading followed by `_None._`.
 
@@ -175,6 +226,20 @@ Produce a Markdown document with this exact structure and section order. Section
 
 > "<another quote>"
 > — <SPEAKER>, [<MM:SS>](<youtube link>). Standalone insight.
+
+## Key Visuals
+
+### <Short title of the visual> — [<MM:SS>](https://youtu.be/<video_id>?t=<seconds>)
+
+![<Short title of the visual>](frames/<file>)
+
+<One-line caption: what the graph/chart/table/diagram shows and why it matters.>
+
+### <Next visual> — [<MM:SS>](https://youtu.be/<video_id>?t=<seconds>)
+
+![<Next visual>](frames/<file>)
+
+<One-line caption.>
 ```
 
 Rules:
@@ -194,7 +259,9 @@ Rules:
    - **Standalone insights:** Something a speaker said that you'd want to remember even with no reaction trigger. Annotate with `Standalone insight.` or a short context line.
    - Quote text must be from the transcript (capitalization may be normalized). Anchor each quote with a timestamp link. If no salient quotes, write `_None._`.
 
-7. **Empty sections.** Always include all five section headings. Empty section body is `_None._`.
+7. **Key Visuals.** One sub-section per frame you kept in the vision step, in chronological order by timestamp. Each has an H3 title, the embedded image (`![alt](frames/<file>)` — relative path so it renders inline next to the summary), a timestamp link into the video, and a one-line caption saying what the visual shows. Only include genuinely informative visuals (graphs, charts, tables, diagrams, data slides, code). If Stage 3 was skipped, failed, or you kept no frames, write `_None._`.
+
+8. **Empty sections.** Always include all six section headings. Empty section body is `_None._`.
 
 Write only the Markdown document. No commentary.
 
@@ -202,12 +269,14 @@ Write only the Markdown document. No commentary.
 
 - Stage 1 is gated by the existence of `<basename>--original.vtt` (the script handles this internally).
 - Stage 2 is gated by `<basename>--processed.md`.
-- Stage 3 is gated by `<basename>--summary.md`.
-- `--force` redoes all three.
+- Stage 3 is gated by `frames/manifest.json` (skipped entirely with `--no-visuals`).
+- Stage 4 is gated by `<basename>--summary.md`.
+- `--force` redoes all stages.
 
-After all three stages complete, report the absolute paths of the three artifacts to the user as a tight bulleted list.
+After all stages complete, report the absolute paths of the artifacts to the user as a tight bulleted list (the two Markdown files, plus the `frames/` folder and how many visuals were kept, when applicable).
 
 ## Errors
 
-- If Stage 1 fails (no English captions, private video, network, etc.), surface the stderr message and stop. Do not attempt Stages 2 or 3.
+- If Stage 1 fails (no English captions, private video, network, etc.), surface the stderr message and stop. Do not attempt later stages.
 - If `parse_vtt.py` produces an empty cues list, tell the user the captions were empty and stop.
+- Stage 3 (frame extraction) is best-effort. If `extract_frames.py` exits non-zero — including when ffmpeg is not installed (`brew install ffmpeg`), the video can't be downloaded, or extraction yields nothing — do not fail the run. Continue to Stage 4 and set Key Visuals to `_None._`. Optionally mention to the user that visuals were skipped and why.

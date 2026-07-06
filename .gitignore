@@ -6,3 +6,7 @@ __pycache__/
 *.tmp
 .venv/
 .DS_Store
+
+# Video-analysis byproducts (large / regenerable)
+*--video.*
+frames/
