@@ -1,4 +1,9 @@
 """Tests for the pure logic in extract_frames (no ffmpeg/yt-dlp needed)."""
+import subprocess
+from pathlib import Path
+from unittest.mock import MagicMock, patch
+
+from scripts import extract_frames
 from scripts.extract_frames import (
     _format_timestamp,
     parse_freeze_segments,
@@ -97,3 +102,88 @@ class TestSelectCandidates:
     def test_under_cap_returns_all_thinned(self):
         times = [0.0, 5.0, 10.0]
         assert select_candidates(times, min_gap=2.0, max_candidates=10) == [0.0, 5.0, 10.0]
+
+
+def _completed(returncode=0, stdout="", stderr=""):
+    cp = MagicMock(spec=subprocess.CompletedProcess)
+    cp.returncode = returncode
+    cp.stdout = stdout
+    cp.stderr = stderr
+    return cp
+
+
+class TestDownloadVideoFormat:
+    """_download_video should request a single merged mp4, full-res by default."""
+
+    def _capture_cmd(self, tmp_path, max_height):
+        captured = {}
+
+        def fake_run(cmd, *args, **kwargs):
+            captured["cmd"] = cmd
+            # Simulate yt-dlp producing the merged file.
+            (tmp_path / "vid--video.mp4").write_bytes(b"fake-mp4")
+            return _completed(returncode=0)
+
+        with patch.object(extract_frames.subprocess, "run", side_effect=fake_run):
+            produced = extract_frames._download_video(
+                url="https://youtu.be/abc",
+                folder=tmp_path,
+                basename="vid",
+                max_height=max_height,
+                force=False,
+            )
+        return captured["cmd"], produced
+
+    def test_full_resolution_merged_by_default(self, tmp_path):
+        cmd, produced = self._capture_cmd(tmp_path, max_height=0)
+        assert produced is not None and produced.is_file()
+        fmt = cmd[cmd.index("-f") + 1]
+        assert fmt == "bestvideo+bestaudio/best"
+        assert "--merge-output-format" in cmd
+        assert cmd[cmd.index("--merge-output-format") + 1] == "mp4"
+        # No height cap when full resolution.
+        assert "height<=" not in fmt
+
+    def test_caps_resolution_when_max_height_positive(self, tmp_path):
+        cmd, _ = self._capture_cmd(tmp_path, max_height=720)
+        fmt = cmd[cmd.index("-f") + 1]
+        assert "height<=720" in fmt
+        assert "+bestaudio" in fmt
+        assert "--merge-output-format" in cmd
+
+
+class TestKeepVideoDefault:
+    """run() keeps the downloaded video by default; --delete-video removes it."""
+
+    def _run_with(self, tmp_path, delete_video):
+        video = tmp_path / "vid--video.mp4"
+        video.write_bytes(b"fake-mp4")
+
+        with patch.object(extract_frames, "_check_binaries", return_value=None), \
+             patch.object(extract_frames, "_download_video", return_value=video), \
+             patch.object(extract_frames, "_detect_freeze_segments", return_value=[]):
+            rc = extract_frames.run(
+                url="https://youtu.be/abc",
+                folder=str(tmp_path),
+                basename="vid",
+                force=False,
+                freeze_noise="-60dB",
+                min_hold=3.0,
+                min_gap=2.0,
+                max_candidates=60,
+                max_height=0,
+                delete_video=delete_video,
+            )
+        return rc, video
+
+    def test_video_kept_by_default(self, tmp_path, capsys):
+        rc, video = self._run_with(tmp_path, delete_video=False)
+        capsys.readouterr()
+        assert rc == 0
+        assert video.is_file(), "video should be kept by default"
+
+    def test_delete_video_flag_removes_it(self, tmp_path, capsys):
+        rc, video = self._run_with(tmp_path, delete_video=True)
+        capsys.readouterr()
+        assert rc == 0
+        assert not video.exists(), "--delete-video should remove the file"

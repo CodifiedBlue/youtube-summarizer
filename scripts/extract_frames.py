@@ -1,5 +1,6 @@
-"""Download a YouTube video (capped resolution) and extract candidate frames
-for on-screen-visual analysis (graphs, charts, tables, slides, diagrams).
+"""Download a YouTube video (full resolution) and extract candidate frames
+for on-screen-visual analysis (graphs, charts, tables, slides, diagrams). The
+downloaded video is kept by default (pass --delete-video to remove it).
 
 Deterministic layer only: this script does NOT judge which frames are salient.
 It relies on a simple, powerful heuristic to keep the candidate set tiny (and
@@ -16,7 +17,7 @@ layer) then reads only this small set and picks the genuinely salient ones.
 CLI:
   python3 scripts/extract_frames.py <url> --folder <folder> [--basename <name>]
       [--force] [--freeze-noise N] [--min-hold S] [--min-gap S]
-      [--max-candidates N] [--max-height PX] [--keep-video]
+      [--max-candidates N] [--max-height PX] [--delete-video]
 
 Output (stdout, single JSON line):
   {
@@ -163,7 +164,11 @@ def _check_binaries() -> Optional[str]:
 def _download_video(
     url: str, folder: Path, basename: str, max_height: int, force: bool
 ) -> Optional[Path]:
-    """Download a capped-resolution copy of the video. Returns its path or None."""
+    """Download the video as a single merged mp4 and return its path (or None).
+
+    Full resolution by default (with audio, so the kept file is watchable).
+    Pass ``max_height`` > 0 to cap the resolution instead.
+    """
     existing = sorted(folder.glob(f"{basename}--video.*"))
     existing = [p for p in existing if not p.name.endswith(".tmp")]
     if existing and not force:
@@ -172,12 +177,17 @@ def _download_video(
         p.unlink()
 
     output_template = str(folder / f"{basename}--video.%(ext)s")
-    fmt = (
-        f"bestvideo[height<={max_height}]/best[height<={max_height}]/best"
-    )
+    if max_height and max_height > 0:
+        fmt = (
+            f"bestvideo[height<={max_height}]+bestaudio/"
+            f"best[height<={max_height}]/best"
+        )
+    else:
+        fmt = "bestvideo+bestaudio/best"
     cmd = [
         "yt-dlp",
         "-f", fmt,
+        "--merge-output-format", "mp4",
         "--output", output_template,
         url,
     ]
@@ -251,7 +261,7 @@ def run(
     min_gap: float,
     max_candidates: int,
     max_height: int,
-    keep_video: bool,
+    delete_video: bool,
 ) -> int:
     hint = _check_binaries()
     if hint:
@@ -307,7 +317,7 @@ def run(
             "timestamp": _format_timestamp(secs),
         })
 
-    if not keep_video:
+    if delete_video:
         try:
             video_path.unlink()
         except OSError:
@@ -339,8 +349,8 @@ def main(argv: List[str]) -> int:
     parser.add_argument("--min-hold", type=float, default=3.0, help="Minimum seconds a frame must stay static to count as a held visual. Higher filters more talking-head micro-pauses; lower catches briefly-shown slides (default 3.0)")
     parser.add_argument("--min-gap", type=float, default=2.0, help="Minimum seconds between kept candidate frames (default 2.0)")
     parser.add_argument("--max-candidates", type=int, default=60, help="Cap on candidate frames handed to the vision layer (default 60)")
-    parser.add_argument("--max-height", type=int, default=720, help="Cap video resolution for the download (default 720)")
-    parser.add_argument("--keep-video", action="store_true", help="Keep the downloaded video file (default: delete after extraction)")
+    parser.add_argument("--max-height", type=int, default=0, help="Cap video resolution for the download; 0 = full resolution (default)")
+    parser.add_argument("--delete-video", action="store_true", help="Delete the downloaded video after frame extraction (default: keep it)")
     args = parser.parse_args(argv[1:])
     return run(
         url=args.url,
@@ -352,7 +362,7 @@ def main(argv: List[str]) -> int:
         min_gap=args.min_gap,
         max_candidates=args.max_candidates,
         max_height=args.max_height,
-        keep_video=args.keep_video,
+        delete_video=args.delete_video,
     )
 
 

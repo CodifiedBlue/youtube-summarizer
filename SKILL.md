@@ -10,7 +10,8 @@ This skill turns a YouTube URL into these artifacts in a per-video subfolder:
 1. `<basename>--original.vtt` — raw English captions from `yt-dlp`.
 2. `<basename>--processed.md` — readable transcript with movie-script speaker labels and topic-grouped paragraphs, each anchored with a YouTube timestamp link.
 3. `frames/` — candidate on-screen-visual frames (JPEGs) extracted from the video, plus a `manifest.json` mapping each frame to a timestamp. Candidates are limited to frames that are **held static** on screen (see Stage 3), so the set is small and high-precision. Non-salient candidates are pruned during Stage 4; the kept frames are embedded in the summary.
-4. `<basename>--summary.md` — structured summary: overview, key takeaways, action items, lists mentioned, salient quotes, and **key visuals** (the most salient graphs, charts, tables, and diagrams shown on screen).
+4. `<basename>--video.mp4` — the full-resolution video downloaded for frame extraction, **kept** (not deleted). Present whenever Stage 3 runs; absent with `--no-visuals`.
+5. `<basename>--summary.md` — structured summary: overview, key takeaways, action items, lists mentioned, salient quotes, and **key visuals** (the most salient graphs, charts, tables, and diagrams shown on screen).
 
 The skill splits work between Python helpers (deterministic) and Claude (language- and vision-judgment). You — Claude — handle stages 2 and 4 (Stage 3 is a Python helper; you do the vision selection during Stage 4).
 
@@ -125,7 +126,7 @@ Write only the Markdown document. No commentary, no surrounding explanations.
 
 Skip this stage entirely if `--no-visuals` was passed.
 
-This stage downloads a resolution-capped copy of the video and extracts candidate frames plus a manifest. It is a deterministic Python helper — it does **not** decide which frames are salient. That judgment happens in Stage 4.
+This stage downloads a full-resolution copy of the video and extracts candidate frames plus a manifest. The downloaded video is **kept** at `<folder>/<basename>--video.mp4` (pass `--delete-video` to remove it after extraction). It is a deterministic Python helper — it does **not** decide which frames are salient. That judgment happens in Stage 4.
 
 **How candidates are chosen (and why it's cheap):** salient visuals — charts, tables, slides, diagrams — are *held still* on screen, whereas talking heads, transitions, animations, and b-roll are in constant motion. The helper uses ffmpeg's `freezedetect` filter to find segments where the picture stops changing for at least `--min-hold` seconds, then keeps ONE representative frame per held segment. This is purely mechanical (no LLM) and drastically shrinks the set the vision layer must review: a pure talking-head video yields ~zero candidates, while a slide deck yields roughly one frame per slide.
 
@@ -273,7 +274,7 @@ Write only the Markdown document. No commentary.
 - Stage 4 is gated by `<basename>--summary.md`.
 - `--force` redoes all stages.
 
-After all stages complete, report the absolute paths of the artifacts to the user as a tight bulleted list (the two Markdown files, plus the `frames/` folder and how many visuals were kept, when applicable).
+After all stages complete, report the absolute paths of the artifacts to the user as a tight bulleted list (the two Markdown files, plus the `frames/` folder and how many visuals were kept, and the kept `<basename>--video.mp4`, when applicable).
 
 ## Errors
 
